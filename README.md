@@ -38,7 +38,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-1. Prepare your Excel file with names in the "Nume" column
+1. Prepare your Excel file with names in the "Nume" column (or use `Baza de date - Cautare ANI_short.xlsx` - by default in the script)
 2. Run the script:
 ```bash
 python scraper.py
