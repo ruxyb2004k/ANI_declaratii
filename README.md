@@ -13,7 +13,7 @@ This project is a Python automated data downloader for the Romanian asset declar
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.8+ (in my installation 3.9.13)
 - Chrome browser
 - Required Python packages (see requirements.txt)
 
