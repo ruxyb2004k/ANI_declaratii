@@ -38,14 +38,19 @@ pip install -r requirements.txt
 
 ## Usage
 
-1. Prepare your Excel file with names in the "Nume" column (or use `Baza de date - Cautare ANI_short.xlsx` - by default in the script)
-2. Run the script:
+1. Prepare your Excel file with names in the "Nume" column
+2. Run the script with your Excel file as an argument:
 ```bash
-python scraper.py
+python scraper.py your_excel_file.xlsx
+```
+
+For example:
+```bash
+python scraper.py "Baza de date - Cautare ANI.xlsx"
 ```
 
 The script will:
-- Read names from the Excel file
+- Read names from the specified Excel file
 - Search for each person's declarations
 - Download available PDF files
 - Save all data to an Excel file
@@ -61,3 +66,4 @@ The script will:
 - Although Cloudflare is most of the time handled automatically, you might sometime need to it manually
 - The script includes random delays to avoid being blocked
 - Files are renamed with meaningful names based on declaration data
+- If multiple declarations would have the same filename, numbers are added to make them unique

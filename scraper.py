@@ -12,6 +12,7 @@ import pandas as pd
 import requests
 from dotenv import load_dotenv
 import urllib.parse
+import sys
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -88,40 +89,69 @@ class DeclaratiiScraper:
             if results is not None and not results.empty:
                 logger.info(f"Found {len(results)} declarations for {name}")
                 
-                # Get all download buttons
-                download_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button.mdc-button")
-                
-                for idx, row in results.iterrows():
-                    if row['has_download'] and idx < len(download_buttons):
-                        # Create filename
-                        filename = f"{row['name'].replace(' ', '_')}_{row['date'].replace('.', '-')}_{row['declaration_type'].replace(' ', '_')}.pdf"
-                        filename = urllib.parse.unquote(filename)  # Handle special characters
-                        
-                        # Add filename to row data
-                        row_dict = row.to_dict()
-                        row_dict['saved_filename'] = filename
-                        
-                        # Download the file
-                        success = self.download_file_from_button(download_buttons[idx], filename)
-                        if success:
-                            logger.info(f"Downloaded to {filename}")
-                            row_dict['download_status'] = 'Success'
+                # Process all pages
+                while True:
+                    # Get all download buttons on current page
+                    download_buttons = self.driver.find_elements(By.CSS_SELECTOR, "button.mdc-button")
+                    
+                    # Process current page
+                    for idx, row in results.iterrows():
+                        if row['has_download'] and idx < len(download_buttons):
+                            # Create filename
+                            filename = f"{row['name'].replace(' ', '_')}_{row['date'].replace('.', '-')}_{row['declaration_type'].replace(' ', '_')}.pdf"
+                            filename = urllib.parse.unquote(filename)  # Handle special characters
+                            
+                            # Add filename to row data
+                            row_dict = row.to_dict()
+                            row_dict['saved_filename'] = filename
+                            
+                            # Download the file
+                            success, final_filename = self.download_file_from_button(download_buttons[idx], filename)
+                            if success:
+                                logger.info(f"Downloaded to {final_filename}")
+                                row_dict['download_status'] = 'Success'
+                                row_dict['saved_filename'] = final_filename  # Update with final filename
+                            else:
+                                logger.error(f"Failed to download {filename}")
+                                row_dict['download_status'] = 'Failed'
+                            
+                            # Add to all_data
+                            self.all_data.append(row_dict)
+                            
+                            # Wait between downloads
+                            self.random_delay()
                         else:
-                            logger.error(f"Failed to download {filename}")
-                            row_dict['download_status'] = 'Failed'
+                            logger.warning(f"No download button for {row['name']} on {row['date']}")
+                            # Add to all_data even if no download button
+                            row_dict = row.to_dict()
+                            row_dict['saved_filename'] = 'N/A'
+                            row_dict['download_status'] = 'No download button'
+                            self.all_data.append(row_dict)
+                    
+                    # Check for next page button
+                    try:
+                        next_page_button = self.driver.find_element(By.CSS_SELECTOR, "button.mat-mdc-paginator-navigation-next")
+                        if not next_page_button.is_enabled():
+                            logger.info("No more pages to process")
+                            break
+                            
+                        # Click next page
+                        next_page_button.click()
+                        logger.info("Moving to next page")
                         
-                        # Add to all_data
-                        self.all_data.append(row_dict)
+                        # Wait for the new page to load
+                        time.sleep(random.uniform(3, 5))
                         
-                        # Wait between downloads
-                        self.random_delay()
-                    else:
-                        logger.warning(f"No download button for {row['name']} on {row['date']}")
-                        # Add to all_data even if no download button
-                        row_dict = row.to_dict()
-                        row_dict['saved_filename'] = 'N/A'
-                        row_dict['download_status'] = 'No download button'
-                        self.all_data.append(row_dict)
+                        # Get new results
+                        results = self.extract_table_data()
+                        if results is None or results.empty:
+                            logger.info("No more results found")
+                            break
+                            
+                    except NoSuchElementException:
+                        logger.info("No pagination found - this is the only page")
+                        break
+                        
             else:
                 logger.warning(f"No declarations found for {name}")
                 
@@ -178,27 +208,58 @@ class DeclaratiiScraper:
             # Wait for the download to complete and get the downloaded file path
             downloaded_file = self.wait_for_download()
             if downloaded_file:
-                # Rename the file
+                # Handle duplicate filenames
+                base_name = os.path.splitext(filename)[0]
+                extension = os.path.splitext(filename)[1]
+                counter = 1
                 new_path = os.path.join(os.path.dirname(downloaded_file), filename)
+                
+                # If file exists, add a number to the filename
+                while os.path.exists(new_path):
+                    new_path = os.path.join(os.path.dirname(downloaded_file), f"{base_name}_{counter}{extension}")
+                    counter += 1
+                
                 try:
-                    # If a file with the same name exists, remove it first
-                    if os.path.exists(new_path):
-                        os.remove(new_path)
                     os.rename(downloaded_file, new_path)
-                    logger.info(f"Successfully downloaded and renamed to {filename}")
-                    return True
+                    final_filename = os.path.basename(new_path)
+                    logger.info(f"Successfully downloaded and renamed to {final_filename}")
+                    return True, final_filename
                 except Exception as e:
                     logger.error(f"Error renaming file: {str(e)}")
-                    return False
+                    return False, None
             else:
                 logger.error(f"Download timeout for {filename}")
-                return False
+                return False, None
                 
         except Exception as e:
             logger.error(f"Error downloading file: {str(e)}")
-            # Add a delay even if there was an error
-            time.sleep(random.uniform(4, 10))
-            return False
+            return False, None
+
+    def wait_for_cloudflare(self, timeout=30):
+        """Wait for Cloudflare verification to complete"""
+        start_time = time.time()
+        logger.info("Waiting for Cloudflare verification...")
+        
+        while time.time() - start_time < timeout:
+            try:
+                # Check if we're on the Cloudflare verification page
+                if "challenge" in self.driver.current_url or "cloudflare" in self.driver.current_url.lower():
+                    logger.info("Cloudflare verification detected. Please complete the verification manually.")
+                    # Wait for the verification to complete
+                    while time.time() - start_time < timeout:
+                        if "challenge" not in self.driver.current_url and "cloudflare" not in self.driver.current_url.lower():
+                            logger.info("Cloudflare verification completed!")
+                            return True
+                        time.sleep(1)
+                else:
+                    # If we're not on the verification page, we're good
+                    return True
+            except Exception as e:
+                logger.error(f"Error checking Cloudflare status: {str(e)}")
+                time.sleep(1)
+        
+        logger.error("Timeout waiting for Cloudflare verification")
+        return False
 
     def search_person(self, name):
         """Search for a person by name"""
@@ -273,9 +334,13 @@ class DeclaratiiScraper:
             logger.info("Clicking submit button")
             submit_button.click()
             
-            # Wait for Cloudflare to clear after search
-            logger.info("Waiting for Cloudflare to clear...")
-            time.sleep(10)
+            # Wait for Cloudflare verification if needed
+            if not self.wait_for_cloudflare():
+                logger.error("Failed to pass Cloudflare verification")
+                return None
+            
+            # Additional wait after verification
+            time.sleep(5)
             
             return self.extract_table_data()
             
@@ -349,13 +414,24 @@ class DeclaratiiScraper:
             self.driver.quit()
 
 def main():
+    # Check if Excel file is provided as argument
+    if len(sys.argv) != 2:
+        logger.error("Please provide the Excel file name as an argument.")
+        logger.error("Usage: python scraper.py <excel_file_name>")
+        return
+
+    excel_file = sys.argv[1]
+    if not os.path.exists(excel_file):
+        logger.error(f"Excel file '{excel_file}' not found.")
+        return
+
     scraper = DeclaratiiScraper()
     try:
         # Create downloads directory if it doesn't exist
         os.makedirs('downloads', exist_ok=True)
         
         # Get names from Excel file
-        excel_file = "Baza de date - Cautare ANI_short.xlsx"
+        # excel_file = "Baza de date - Cautare ANI_short.xlsx"
         names = scraper.get_names_from_excel(excel_file)
         
         if not names:
